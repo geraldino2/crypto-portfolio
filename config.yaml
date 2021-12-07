@@ -1,0 +1,6 @@
+--- 
+wallet_address: '0x4e7d077690613fd2dcbc8E5F60a5206199f62209'
+bsc_address: 'https://bsc-dataseed1.binance.org:443'
+bscscan_api_key: 'abc'
+binance_api_key: 'def'
+binance_secret_key: 'ghi'
