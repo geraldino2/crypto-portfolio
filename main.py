@@ -5,104 +5,161 @@ import requests
 from web3.middleware import geth_poa_middleware
 from web3 import Web3
 
-cfg=None
-contracts_addr=set()
-
 with open("config.yaml") as config_file:
-	cfg=yaml.safe_load(config_file)
+	CFG=yaml.safe_load(config_file)
 
-w3 = Web3(Web3.HTTPProvider(cfg["bsc_address"]))
-w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+def w3_instance(address:str):
+	w3 = Web3(Web3.HTTPProvider(address))
+	w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+	return w3
 
-def checksum_address(address:str):
+def checksum_address(w3:Web3, address:str):
 	return w3.toChecksumAddress(address.lower())
 
-def normalize_balance(price):
+def normalize_balance(w3:Web3, price):
 	return float(w3.fromWei(price, "ether"))
 
-def bsc_abi(contract_address:str) -> dict:
-	base_url = "https://api.bscscan.com/api"
+def get_abi(api_key:str, api_url:str, contract_address:str) -> dict:
 	params = dict()
 	params["module"] = "contract"
 	params["action"] = "getabi"
 	params["address"] = contract_address
-	params["apikey"] = cfg["bscscan_api_key"]
-	req = requests.get(f"https://api.bscscan.com/api", params=params)
+	params["apikey"] = api_key
+	req = requests.get(api_url, params=params)
 	return req.json()["result"]
 
-def pancake_bnb_usdt() -> float:
-	pancake_router = "0x10ED43C718714eb63d5aA57B78B54704E256024E"
-	bnb_address = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
-	usdt_address = "0x55d398326f99059fF775485246999027B3197955"
-	pancake_abi = bsc_abi(pancake_router)
+def wcoin_usdt_price(w3:Web3, api_key:str, api_url:str, router, wcoin, usdt) -> float:
+	abi = get_abi(api_key, api_url, router)
+	router = w3.eth.contract(address=router, abi=abi)
+	wcoin_usd = router.functions.getAmountsOut(w3.toWei("1", "ether"), [wcoin, usdt]).call()
+	return(float(normalize_balance(w3,wcoin_usd[1])))
 
-	router = w3.eth.contract(address=pancake_router, abi=pancake_abi)
-	usd_bnb = router.functions.getAmountsOut(w3.toWei("1", "ether"), [bnb_address, usdt_address]).call()
-	return(float(normalize_balance(usd_bnb[1])))
+def dex_price(w3:Web3, api_key:str, api_url:str, router, WCOIN_ADDRESS, USDT_ADDRESS, WCOIN_USDT_PRICE, contract_address:str) -> list:
+	contract_address = checksum_address(w3,contract_address)
+	token_abi = get_abi(api_key, api_url, contract_address)
+	router_abi = get_abi(api_key, api_url, router)
 
-def pancake_price(contract_address:str) -> list:
-	pancake_router = "0x10ED43C718714eb63d5aA57B78B54704E256024E"
-	bnb_address = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
-	usdt_address = "0x55d398326f99059fF775485246999027B3197955"
-	contract_address = checksum_address(contract_address)
-	token_abi = bsc_abi(contract_address)
-	pancake_abi = bsc_abi(pancake_router)
+	router = w3.eth.contract(address=router, abi=router_abi)
 
-	router = w3.eth.contract(address=pancake_router, abi=pancake_abi)
-	usd_bnb = router.functions.getAmountsOut(w3.toWei("1", "ether"), [bnb_address, usdt_address]).call()
-	usd_bnb = normalize_balance(usd_bnb[1])
-
-	token_contract = w3.eth.contract(address=checksum_address(contract_address), abi=token_abi)
+	token_contract = w3.eth.contract(address=checksum_address(w3, contract_address), abi=token_abi)
 	decimals = token_contract.functions.decimals().call()
 
 	try:
-		txn = router.functions.getAmountsOut(10**decimals, [contract_address, bnb_address]).call()
-		bnb_token = normalize_balance(txn[1])
-		usd_token = bnb_token*usd_bnb
-	except: #bnb pair not found, usdt pair may exist
+		txn = router.functions.getAmountsOut(10**decimals, [contract_address, WCOIN_ADDRESS]).call()
+		coin_token = normalize_balance(w3,txn[1])
+		usd_token = coin_token*WCOIN_USDT_PRICE
+	except: #wcoin pair not found, usdt pair may exist
 		try:
-			txn = router.functions.getAmountsOut(10**decimals, [contract_address, usdt_address]).call()
-			usd_token = normalize_balance(txn[1])
-			bnb_token = usd_token/usd_bnb
+			txn = router.functions.getAmountsOut(10**decimals, [contract_address, BSC_USDT_ADDRESS]).call()
+			usd_token = normalize_balance(w3,txn[1])
+			coin_token = usd_token/WCOIN_USDT_PRICE
 		except: #neither usdt nor bnb pairs exist
 			return [None, None]
-	return [bnb_token, usd_token]
-
-with open("bep20_contracts") as bep20_contracts_file:
-	for contract_address in bep20_contracts_file.read().split("\n"):
-		contracts_addr.add(contract_address)
+	return [coin_token, usd_token]
 
 subtotal=0
+
+print("-"*40)
 print("BSC")
 print("-"*40)
-balance = normalize_balance(w3.eth.get_balance(cfg["wallet_address"]))
-bnb_usdt_price = pancake_bnb_usdt()
-usd_balance = balance*bnb_usdt_price
+w3 = w3_instance(CFG["bsc_address"])
+BSCSCAN_API_KEY=CFG["bscscan_api_key"]
+BSCSCAN_API_URL=CFG["bscscan_api_url"]
+PANCAKE_ROUTER=CFG["pancake_router"]
+BSC_WBNB_ADDRESS=CFG["bsc_wbnb"]
+BSC_USDT_ADDRESS=CFG["bsc_usdt"]
+BNB_USDT_PRICE=wcoin_usdt_price(w3, 
+								BSCSCAN_API_KEY, 
+								BSCSCAN_API_URL, 
+								PANCAKE_ROUTER, 
+								BSC_WBNB_ADDRESS, 
+								BSC_USDT_ADDRESS)
+balance = normalize_balance(w3,
+							w3.eth.get_balance(CFG["wallet_address"]))
+usd_balance = balance*BNB_USDT_PRICE
 subtotal += float(usd_balance)
-print(f"BNB (${round(bnb_usdt_price,8)})")
+print(f"BNB (${round(BNB_USDT_PRICE,8)})")
 print(f"{round(balance,8)} = ${round(usd_balance,3)}")
-for contract_address in contracts_addr:
-	abi = bsc_abi(contract_address)
-	contract = w3.eth.contract(address=checksum_address(contract_address), abi=abi)
-	balance = contract.functions.balanceOf(checksum_address(cfg["wallet_address"])).call()
+bep20_contracts_addr=set()
+with open("bep20_contracts") as bep20_contracts_file:
+	for contract_address in bep20_contracts_file.read().split("\n"):
+		bep20_contracts_addr.add(contract_address)
+for contract_address in bep20_contracts_addr:
+	abi = get_abi(BSCSCAN_API_KEY, BSCSCAN_API_URL, contract_address)
+	contract = w3.eth.contract(address=checksum_address(w3,contract_address),
+								abi=abi)
+	balance = contract.functions.balanceOf(checksum_address(w3,CFG["wallet_address"])).call()
 	symbol = contract.functions.symbol().call().upper()
-	balance = normalize_balance(balance)
+	balance = normalize_balance(w3,balance)
 	if(balance>0):
-		usd_price = pancake_price(contract_address)[1]
+		usd_price = dex_price(w3,
+								BSCSCAN_API_KEY,
+								BSCSCAN_API_URL,
+								PANCAKE_ROUTER,
+								BSC_WBNB_ADDRESS,
+								BSC_USDT_ADDRESS,
+								BNB_USDT_PRICE, 
+								contract_address)[1]
 		usd_balance = usd_price*balance
 		subtotal += float(usd_balance)
 		print(f"{symbol} (${round(usd_price,8)})")
 		print(f"{round(balance,8)} = ${round(usd_balance,3)}")
+print("-"*40)
 
+print("AVAX C-CHAIN")
+print("-"*40)
+w3 = w3_instance(CFG["avax_address"])
+SNOWTRACE_API_KEY=CFG["snowtrace_api_key"]
+SNOWTRACE_API_URL=CFG["snowtrace_api_url"]
+JOE_ROUTER=checksum_address(w3,CFG["traderjoe_router"])
+AVAX_WAVAX_ADDRESS=checksum_address(w3,CFG["avax_wavax"])
+AVAX_USDT_ADDRESS=checksum_address(w3,CFG["avax_usdt"])
+AVAX_USDT_PRICE=wcoin_usdt_price(w3, 
+								SNOWTRACE_API_KEY, 
+								SNOWTRACE_API_URL, 
+								JOE_ROUTER, 
+								AVAX_WAVAX_ADDRESS, 
+								AVAX_USDT_ADDRESS)*10**12
+balance = normalize_balance(w3,
+							w3.eth.get_balance(CFG["wallet_address"]))
+usd_balance = balance*AVAX_USDT_PRICE
+subtotal += float(usd_balance)
+print(f"AVAX (${round(AVAX_USDT_PRICE,8)})")
+print(f"{round(balance,8)} = ${round(usd_balance,3)}")
+avaxc_contracts_addr=set()
+with open("avaxc_contracts") as avaxc_contracts_file:
+	for contract_address in avaxc_contracts_file.read().split("\n"):
+		avaxc_contracts_addr.add(contract_address)
+for contract_address in avaxc_contracts_addr:
+	abi = get_abi(SNOWTRACE_API_KEY, SNOWTRACE_API_URL, contract_address)
+	contract = w3.eth.contract(address=checksum_address(w3,contract_address),
+								abi=abi)
+	balance = contract.functions.balanceOf(checksum_address(w3,CFG["wallet_address"])).call()
+	symbol = contract.functions.symbol().call().upper()
+	balance = normalize_balance(w3,balance)
+	if(balance>0):
+		usd_price = dex_price(w3,
+								SNOWTRACE_API_KEY,
+								SNOWTRACE_API_URL,
+								JOE_ROUTER,
+								AVAX_WAVAX_ADDRESS,
+								AVAX_USDT_ADDRESS,
+								AVAX_USDT_PRICE, 
+								contract_address)[1]
+		usd_balance = usd_price*balance
+		subtotal += float(usd_balance)
+		print(f"{symbol} (${round(usd_price,8)})")
+		print(f"{round(balance,8)} = ${round(usd_balance,3)}")
+print("-"*40)
+
+print("Binance")
+print("-"*40)
 exchange_id="binance"
 exchange_class=getattr(ccxt, exchange_id)
 binance=exchange_class({
-    "apiKey": cfg["binance_api_key"],
-    "secret": cfg["binance_secret_key"],
+	"apiKey": CFG["binance_api_key"],
+	"secret": CFG["binance_secret_key"],
 })
-print("-"*40)
-print("Binance")
-print("-"*40)
 balances=binance.fetchBalance()
 for key in balances["total"]:
 	if(key=="NFT"):
