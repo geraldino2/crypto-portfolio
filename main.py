@@ -7,7 +7,6 @@ from web3 import Web3
 
 with open("config.yaml") as config_file:
 	CFG = yaml.safe_load(config_file)
-	WALLET_ADDRESS = checksum_address(w3, CFG["wallet_address"])
 
 chains = {
 	"bsc": {
@@ -68,7 +67,7 @@ def wcoin_usdt_price(
 	router = checksum_address(w3, chain["dex_router_address"])
 	wcoin = checksum_address(w3, chain["wrapped_token_address"])
 	usdt = checksum_address(w3, chain["usdt_address"])
-	abi = get_abi(api_key, api_url, router)
+	abi = get_abi(chain, router)
 	router = w3.eth.contract(address=router, abi=abi)
 	wcoin_usd = router.functions.getAmountsOut(w3.toWei("1", "ether"), [wcoin, usdt]).call()
 	return float(normalize_balance(w3,wcoin_usd[1]))
@@ -85,8 +84,8 @@ def dex_price(
 	wcoin_address = checksum_address(w3, chain["wrapped_token_address"])
 	usdt_address = checksum_address(w3, chain["usdt_address"])
 	contract_address = checksum_address(w3, contract_address)
-	token_abi = get_abi(api_key, api_url, contract_address)
-	router_abi = get_abi(api_key, api_url, router)
+	token_abi = get_abi(chain, contract_address)
+	router_abi = get_abi(chain, router)
 
 	router = w3.eth.contract(address=router, abi=router_abi)
 
@@ -115,8 +114,9 @@ subtotal = 0
 print("BSC")
 print("-"*40)
 w3 = w3_instance(CFG["bsc_address"])
+wallet_address = checksum_address(w3, CFG["wallet_address"])
 BNB_USDT_PRICE = wcoin_usdt_price(w3, chains["bsc"])
-balance = normalize_balance(w3, w3.eth.get_balance(WALLET_ADDRESS))
+balance = normalize_balance(w3, w3.eth.get_balance(wallet_address))
 usd_balance = balance*BNB_USDT_PRICE
 subtotal += float(usd_balance)
 print(f"BNB (${round(BNB_USDT_PRICE,8)})")
@@ -129,7 +129,7 @@ for contract_address in bep20_contracts_addr:
 	abi = get_abi(chains["bsc"], contract_address)
 	contract = w3.eth.contract(address=checksum_address(w3,contract_address),
 								abi=abi)
-	balance = contract.functions.balanceOf(WALLET_ADDRESS).call()
+	balance = contract.functions.balanceOf(wallet_address).call()
 	symbol = contract.functions.symbol().call().upper()
 	balance = normalize_balance(w3,balance)
 	if(balance>0):
@@ -148,10 +148,11 @@ print("-"*40)
 print("AVAX C-CHAIN")
 print("-"*40)
 w3 = w3_instance(CFG["avax_address"])
+wallet_address = checksum_address(w3, CFG["wallet_address"])
 AVAX_USDT_PRICE = wcoin_usdt_price(w3, 
 								chains["avalanche-c"])*10**12
 balance = normalize_balance(w3,
-							w3.eth.get_balance(WALLET_ADDRESS))
+							w3.eth.get_balance(wallet_address))
 usd_balance = balance*AVAX_USDT_PRICE
 subtotal += float(usd_balance)
 print(f"AVAX (${round(AVAX_USDT_PRICE,8)})")
@@ -164,7 +165,7 @@ for contract_address in avaxc_contracts_addr:
 	abi = get_abi(chains["avalanche-c"], contract_address)
 	contract = w3.eth.contract(address = checksum_address(w3,contract_address),
 								abi = abi)
-	balance = contract.functions.balanceOf(WALLET_ADDRESS).call()
+	balance = contract.functions.balanceOf(wallet_address).call()
 	symbol = contract.functions.symbol().call().upper()
 	balance = normalize_balance(w3,balance)
 	if(balance>0):
@@ -188,7 +189,7 @@ binance = exchange_class({
 	"apiKey": CFG["binance_api_key"],
 	"secret": CFG["binance_secret_key"],
 })
-balances = binance.fetchBalance()
+balances = binance.fetchBalance({'recvWindow': 10000000})
 for key in balances["total"]:
 	if(key == "NFT"):
 		continue
