@@ -189,7 +189,7 @@ binance = exchange_class({
 	"apiKey": CFG["binance_api_key"],
 	"secret": CFG["binance_secret_key"],
 })
-balances = binance.fetchBalance({'recvWindow': 10000000})
+balances = binance.fetchBalance({'recvWindow': 60000})
 for key in balances["total"]:
 	if(key == "NFT"):
 		continue
